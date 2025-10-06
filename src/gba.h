@@ -1253,11 +1253,9 @@ static FORCE_INLINE void gba_store32(gba_t*gba, unsigned baddr, uint32_t data){
      gba->scratch->rom_protocol == GBA_ROM_PROTOCOL_SERIAL && baddr>=0x08000000){
     
     // SRAM区域（0x0E000000-0x0FFFFFFF，包括镜像）
+    // SRAM只支持8位访问，32位写入只写入一个字节（根据地址偏移）
     if((baddr&0xfe000000)==0x0E000000){
-      uint32_t ram_addr = baddr & 0x00FFFFFF;
-      for(int i = 0; i < 4; i++){
-        gba_buffer_serial_write(gba->scratch, ram_addr + i, (data >> (i*8)) & 0xFF, false);
-      }
+      gba_buffer_serial_write(gba->scratch, baddr & 0xFFFF, data & 0xFF, false);
       return;
     }
     // ROM区域（0x08000000-0x0DFFFFFF）
@@ -1292,11 +1290,9 @@ static FORCE_INLINE void gba_store16(gba_t*gba, unsigned baddr, uint32_t data){
      gba->scratch->rom_protocol == GBA_ROM_PROTOCOL_SERIAL && baddr>=0x08000000){
     
     // SRAM区域（0x0E000000-0x0FFFFFFF，包括镜像）
+    // SRAM只支持8位访问，16位写入只写入一个字节（根据地址偏移）
     if((baddr&0xfe000000)==0x0E000000){
-      uint32_t ram_addr = baddr & 0x00FFFFFF;
-      for(int i = 0; i < 2; i++){
-        gba_buffer_serial_write(gba->scratch, ram_addr + i, (data >> (i*8)) & 0xFF, false);
-      }
+      gba_buffer_serial_write(gba->scratch, baddr & 0xFFFF, data & 0xFF, false);
       return;
     }
     // ROM区域（0x08000000-0x0DFFFFFF）
@@ -1336,7 +1332,7 @@ static FORCE_INLINE void gba_store8(gba_t*gba, unsigned baddr, uint32_t data){
     
     // SRAM区域（0x0E000000-0x0FFFFFFF，包括镜像）
     if((baddr&0xfe000000)==0x0E000000){
-      uint32_t ram_addr = baddr & 0x00FFFFFF;
+      uint32_t ram_addr = baddr & 0xFFFF;
       gba_buffer_serial_write(gba->scratch, ram_addr, data & 0xFF, false);
       return;
     }
@@ -1668,8 +1664,8 @@ static FORCE_INLINE uint32_t * gba_dword_lookup(gba_t* gba,unsigned addr, int re
            gba->scratch->rom_protocol == GBA_ROM_PROTOCOL_SERIAL) {
           // 先刷新所有缓存的写入
           gba_flush_serial_writes(gba->scratch);
-          
-          uint32_t ram_addr = addr & 0x7FFF;  // SRAM通常是32KB，地址范围0-0x7FFF
+
+          uint32_t ram_addr = addr & 0xFFFF;  // 地址范围0-0xFFFF
           serial_port_t port = *(serial_port_t*)gba->scratch->rom_source_serial;
           uint8_t data = 0xFF;
           
@@ -1694,9 +1690,9 @@ static FORCE_INLINE uint32_t * gba_dword_lookup(gba_t* gba,unsigned addr, int re
               uint32_t prefetch_start = (ram_addr / 2048) * 2048;
               uint16_t prefetch_size = 2048;
               
-              // 确保不超出SRAM边界
-              if (prefetch_start + prefetch_size > 0x8000) {
-                prefetch_size = 0x8000 - prefetch_start;
+              // 确保不超出边界
+              if (prefetch_start + prefetch_size > 0x10000) {
+                prefetch_size = 0x10000 - prefetch_start;
               }
               
               // 预读取数据
@@ -1709,13 +1705,8 @@ static FORCE_INLINE uint32_t * gba_dword_lookup(gba_t* gba,unsigned addr, int re
                 uint32_t offset = ram_addr - prefetch_start;
                 data = gba->scratch->ram_prefetch_cache[offset];
                 cache_hit = true;
-                
-                static int prefetch_count = 0;
-                if (prefetch_count < 5) {
-                  printf("[Serial] RAM prefetch: addr=0x%04x, size=%u bytes\n", 
-                         prefetch_start, prefetch_size);
-                  prefetch_count++;
-                }
+                printf("[Serial] RAM prefetch: addr=0x%04x, size=%u bytes\n", 
+                        prefetch_start, prefetch_size);
               }
             }
           }
@@ -2383,12 +2374,8 @@ static void gba_buffer_serial_write(gba_scratch_t *scratch, uint32_t addr, uint8
   // 任何写入（无论ROM还是RAM）都会使RAM预读缓存失效
   if (scratch->ram_prefetch_valid) {
     scratch->ram_prefetch_valid = false;
-    static int invalidate_count = 0;
-    if (invalidate_count < 5) {
       printf("[Serial] RAM prefetch cache invalidated due to %s write at 0x%08x\n",
-             is_rom ? "ROM" : "RAM", addr);
-      invalidate_count++;
-    }
+            is_rom ? "ROM" : "RAM", addr);
   }
   
   // 如果缓存满了，先刷新
