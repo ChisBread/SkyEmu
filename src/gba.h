@@ -7,6 +7,21 @@
 #include "arm7.h"
 #include "gba_bios.h"
 #include <time.h>
+
+// 串口自动查找所需头文件
+#ifdef _WIN32
+  #include <setupapi.h>
+  #include <devguid.h>
+  #include <regstr.h>
+  #pragma comment(lib, "setupapi.lib")
+#elif defined(__APPLE__)
+  #include <CoreFoundation/CoreFoundation.h>
+  #include <IOKit/IOKitLib.h>
+  #include <IOKit/serial/IOSerialKeys.h>
+  #include <IOKit/usb/IOUSBLib.h>
+#elif defined(__linux__)
+  #include <dirent.h>
+#endif
 //Should be power of 2 for perf, 8192 samples gives ~85ms maximal latency for 48kHz
 #define LR 14
 #define PC 15
@@ -1983,7 +1998,197 @@ static void gba_serial_set_dtr(serial_port_t port, bool state) {
 #endif
 }
 
+// 自动查找串口设备（VID=0x0483, PID=0x0721）
+static char* gba_auto_find_serial_port() {
+#ifdef _WIN32
+  // Windows: 使用SetupAPI枚举串口设备
+  static char port_path[256] = {0};
+  HDEVINFO deviceInfoSet;
+  SP_DEVINFO_DATA deviceInfoData;
+  DWORD deviceIndex = 0;
+  
+  printf("[Serial] Searching for USB serial devices (Windows)...\n");
+  
+  // 获取所有串口设备
+  deviceInfoSet = SetupDiGetClassDevs(&GUID_DEVCLASS_PORTS, NULL, NULL, DIGCF_PRESENT);
+  if (deviceInfoSet == INVALID_HANDLE_VALUE) {
+    printf("[Serial] ERROR: Failed to get device information set\n");
+    return NULL;
+  }
+  
+  deviceInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
+  
+  // 枚举所有串口设备
+  while (SetupDiEnumDeviceInfo(deviceInfoSet, deviceIndex++, &deviceInfoData)) {
+    HKEY hDeviceRegistryKey;
+    char portName[256] = {0};
+    DWORD size = sizeof(portName);
+    
+    // 获取端口名称 (COM1, COM2, 等)
+    hDeviceRegistryKey = SetupDiOpenDevRegKey(deviceInfoSet, &deviceInfoData,
+                                               DICS_FLAG_GLOBAL, 0,
+                                               DIREG_DEV, KEY_READ);
+    if (hDeviceRegistryKey != INVALID_HANDLE_VALUE) {
+      DWORD type = REG_SZ;
+      if (RegQueryValueExA(hDeviceRegistryKey, "PortName", NULL, &type,
+                           (LPBYTE)portName, &size) == ERROR_SUCCESS) {
+        
+        // 获取设备的硬件ID以提取VID和PID
+        char hardwareID[1024] = {0};
+        if (SetupDiGetDeviceRegistryPropertyA(deviceInfoSet, &deviceInfoData,
+                                               SPDRP_HARDWAREID, NULL,
+                                               (PBYTE)hardwareID, sizeof(hardwareID), NULL)) {
+          
+          // 解析 VID 和 PID (格式: USB\VID_0483&PID_0721)
+          int vid = 0, pid = 0;
+          if (sscanf(hardwareID, "USB\\VID_%x&PID_%x", &vid, &pid) == 2) {
+            printf("[Serial]   Found: %s (VID=0x%04x, PID=0x%04x)\n", portName, vid, pid);
+            
+            if (vid == 0x0483 && pid == 0x0721) {
+              printf("[Serial]   *** Matched target device!\n");
+              snprintf(port_path, sizeof(port_path), "\\\\.\\%s", portName);
+              RegCloseKey(hDeviceRegistryKey);
+              SetupDiDestroyDeviceInfoList(deviceInfoSet);
+              return port_path;
+            }
+          }
+        }
+      }
+      RegCloseKey(hDeviceRegistryKey);
+    }
+  }
+  
+  SetupDiDestroyDeviceInfoList(deviceInfoSet);
+  printf("[Serial] No matching device found (VID=0x0483, PID=0x0721)\n");
+  return NULL;
+  
+#elif defined(__APPLE__)
+  // macOS: 使用IOKit查找USB设备
+  static char port_path[256] = {0};
+  io_iterator_t serialPortIterator = 0;
+  io_object_t serialPort;
+  
+  // 创建匹配字典
+  CFMutableDictionaryRef matchingDict = IOServiceMatching(kIOSerialBSDServiceValue);
+  if (!matchingDict) return NULL;
+  
+  // 查找所有串口设备
+  kern_return_t kr = IOServiceGetMatchingServices(kIOMasterPortDefault, matchingDict, &serialPortIterator);
+  if (kr != KERN_SUCCESS) return NULL;
+  
+  printf("[Serial] Searching for USB serial devices...\n");
+  
+  while ((serialPort = IOIteratorNext(serialPortIterator))) {
+    // 获取设备路径
+    CFTypeRef devicePath = IORegistryEntryCreateCFProperty(serialPort,
+                                                           CFSTR(kIOCalloutDeviceKey),
+                                                           kCFAllocatorDefault, 0);
+    if (devicePath) {
+      if (CFStringGetCString(devicePath, port_path, sizeof(port_path), kCFStringEncodingUTF8)) {
+        // 获取USB父设备以检查VID/PID
+        io_registry_entry_t parent;
+        kern_return_t kr = IORegistryEntryGetParentEntry(serialPort, kIOServicePlane, &parent);
+        while (kr == KERN_SUCCESS) {
+          CFTypeRef vid = IORegistryEntryCreateCFProperty(parent, CFSTR("idVendor"), kCFAllocatorDefault, 0);
+          CFTypeRef pid = IORegistryEntryCreateCFProperty(parent, CFSTR("idProduct"), kCFAllocatorDefault, 0);
+          
+          if (vid && pid) {
+            int vendor_id = 0, product_id = 0;
+            CFNumberGetValue(vid, kCFNumberIntType, &vendor_id);
+            CFNumberGetValue(pid, kCFNumberIntType, &product_id);
+            
+            printf("[Serial]   Found: %s (VID=0x%04x, PID=0x%04x)\n", port_path, vendor_id, product_id);
+            
+            if (vendor_id == 0x0483 && product_id == 0x0721) {
+              printf("[Serial]   *** Matched target device!\n");
+              if (vid) CFRelease(vid);
+              if (pid) CFRelease(pid);
+              IOObjectRelease(parent);
+              CFRelease(devicePath);
+              IOObjectRelease(serialPort);
+              IOObjectRelease(serialPortIterator);
+              return port_path;
+            }
+            if (vid) CFRelease(vid);
+            if (pid) CFRelease(pid);
+          }
+          
+          io_registry_entry_t next_parent;
+          kr = IORegistryEntryGetParentEntry(parent, kIOServicePlane, &next_parent);
+          IOObjectRelease(parent);
+          parent = next_parent;
+        }
+      }
+      CFRelease(devicePath);
+    }
+    IOObjectRelease(serialPort);
+  }
+  IOObjectRelease(serialPortIterator);
+  
+  printf("[Serial] No matching device found (VID=0x0483, PID=0x0721)\n");
+  return NULL;
+#elif defined(__linux__)
+  // Linux: 读取/sys/bus/usb-serial/devices/
+  static char port_path[256] = {0};
+  DIR *dir = opendir("/sys/class/tty");
+  if (!dir) return NULL;
+  
+  printf("[Serial] Searching for USB serial devices...\n");
+  
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (strncmp(entry->d_name, "ttyUSB", 6) == 0 || strncmp(entry->d_name, "ttyACM", 6) == 0) {
+      char path[512];
+      snprintf(path, sizeof(path), "/sys/class/tty/%s/device/../idVendor", entry->d_name);
+      
+      FILE *f = fopen(path, "r");
+      if (f) {
+        int vid = 0;
+        fscanf(f, "%x", &vid);
+        fclose(f);
+        
+        snprintf(path, sizeof(path), "/sys/class/tty/%s/device/../idProduct", entry->d_name);
+        f = fopen(path, "r");
+        if (f) {
+          int pid = 0;
+          fscanf(f, "%x", &pid);
+          fclose(f);
+          
+          snprintf(port_path, sizeof(port_path), "/dev/%s", entry->d_name);
+          printf("[Serial]   Found: %s (VID=0x%04x, PID=0x%04x)\n", port_path, vid, pid);
+          
+          if (vid == 0x0483 && pid == 0x0721) {
+            printf("[Serial]   *** Matched target device!\n");
+            closedir(dir);
+            return port_path;
+          }
+        }
+      }
+    }
+  }
+  closedir(dir);
+  
+  printf("[Serial] No matching device found (VID=0x0483, PID=0x0721)\n");
+  return NULL;
+#else
+  printf("[Serial] Auto-detection not implemented for this platform\n");
+  return NULL;
+#endif
+}
+
 static serial_port_t gba_open_serial_port(const char* port_name) {
+  // 如果是 "AUTO"，自动查找设备
+  if (strcmp(port_name, "AUTO") == 0) {
+    printf("[Serial] AUTO mode: searching for device...\n");
+    const char* found_port = gba_auto_find_serial_port();
+    if (!found_port) {
+      printf("[Serial] ERROR: No device found in AUTO mode\n");
+      return INVALID_SERIAL_PORT;
+    }
+    port_name = found_port;
+    printf("[Serial] Using auto-detected port: %s\n", port_name);
+  }
+  
 #ifdef _WIN32
   HANDLE handle = CreateFileA(port_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                                OPEN_EXISTING, 0, NULL);
