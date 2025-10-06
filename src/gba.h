@@ -2654,7 +2654,8 @@ static void gba_flush_serial_writes(gba_scratch_t *scratch) {
       
       if (start->is_rom) {
         uint32_t addr_word = start->addr >> 1; // 转为字地址
-        gba_serial_write_rom(port, addr_word, &start->data, 1);
+        uint16_t data = start->data; // 单字节数据
+        gba_serial_write_rom(port, addr_word, (uint8_t*)&data, 2);
       } else {
         gba_serial_write_ram(port, start->addr, &start->data, 1);
       }
@@ -3499,10 +3500,8 @@ static void gba_serial_sram_switch_bank(serial_port_t port, int bank) {
   bank = (bank == 0) ? 0 : 1;
   
   log_printf("[Serial] Switching SRAM bank to %d\n", bank);
-  
-  // 写入bank号到0x09000000 (相对于SRAM基址0x0E000000，实际是0x0E000000+0x09000000)
-  uint8_t bank_byte = (uint8_t)bank;
-  gba_serial_write_ram(port, 0x09000000, &bank_byte, 1);
+  uint16_t bank_byte = bank;
+  gba_serial_write_rom(port, 0x01000000>>1, (uint8_t*)&bank_byte, 2);
 }
 
 // 串口模式下擦除Flash芯片
