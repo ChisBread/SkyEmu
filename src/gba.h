@@ -928,7 +928,7 @@ struct gba_scratch_t{
 #endif
 
 #ifndef GBA_SERIAL_LOG_TO_FILE
-  #define GBA_SERIAL_LOG_TO_FILE 1  // 默认输出到控制台，设置为1则输出到文件
+  #define GBA_SERIAL_LOG_TO_FILE 0  // 默认输出到控制台，设置为1则输出到文件
 #endif
 
 #ifndef GBA_SERIAL_LOG_FILE_PATH
@@ -3816,14 +3816,43 @@ bool gba_load_rom(sb_emu_state_t*emu,gba_t* gba, gba_scratch_t *scratch){
     return false;
   }  
 
-  // 检查ROM数据开头是否为 "READREALTIME"
+  // 检查ROM数据开头是否为 "READREALTIME" (兼容 \r\n 和 \n)
   bool is_realtime_rom = false;
-  if (emu->rom_size >= 14 && strncmp((char*)emu->rom_data, "READREALTIME\n", 13) == 0) {
-    is_realtime_rom = true;
-    log_printf("Detected READREALTIME ROM configuration\n");
+  bool has_crlf = false;
+  
+  // 先检查是否有 READREALTIME 标记（兼容两种换行符）
+  if (emu->rom_size >= 13) {
+    if (strncmp((char*)emu->rom_data, "READREALTIME\n", 13) == 0) {
+      is_realtime_rom = true;
+      has_crlf = false;
+      log_printf("Detected READREALTIME ROM configuration (LF)\n");
+    } else if (emu->rom_size >= 14 && strncmp((char*)emu->rom_data, "READREALTIME\r\n", 14) == 0) {
+      is_realtime_rom = true;
+      has_crlf = true;
+      log_printf("Detected READREALTIME ROM configuration (CRLF)\n");
+    }
   }
   
   if (is_realtime_rom) {
+    // 如果是 Windows 风格的 \r\n，先统一转换为 \n
+    if (has_crlf) {
+      log_printf("Converting CRLF to LF...\n");
+      size_t read_pos = 0, write_pos = 0;
+      while (read_pos < emu->rom_size) {
+        if (read_pos + 1 < emu->rom_size && 
+            emu->rom_data[read_pos] == '\r' && 
+            emu->rom_data[read_pos + 1] == '\n') {
+          // 跳过 \r，只保留 \n
+          emu->rom_data[write_pos++] = '\n';
+          read_pos += 2;
+        } else {
+          emu->rom_data[write_pos++] = emu->rom_data[read_pos++];
+        }
+      }
+      emu->rom_size = write_pos;
+      log_printf("Converted: new size = %zu bytes\n", emu->rom_size);
+    }
+    
     // 解析READREALTIME配置
     char* config_data = (char*)emu->rom_data;
     char* line_ptr = config_data + 13; // 跳过 "READREALTIME\n"
