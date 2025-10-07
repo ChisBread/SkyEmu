@@ -3463,7 +3463,7 @@ void gba_unload(gba_t*gba,gba_scratch_t *scratch){
     }
     
     // 释放缓存内存
-    free(scratch->rom_cache_data);
+    // free(scratch->rom_cache_data); // 由模拟器释放
     scratch->rom_cache_data = NULL;
     
     free(scratch->rom_cache_valid);
@@ -4031,17 +4031,18 @@ bool gba_load_rom(sb_emu_state_t*emu,gba_t* gba, gba_scratch_t *scratch){
       log_printf("Opened serial port: %s\n", address);
     }
     
-    // 尝试从cache文件加载已缓存的数据和valid标志
-    bool loaded_from_cache = gba_load_rom_cache(scratch, scratch->rom_cache_data, rom_size);
-    if (loaded_from_cache) {
-      // valid标志已经从cache文件加载，不需要额外设置
-      log_printf("Loaded ROM cache with validity flags\n");
-    } else {
-      // cache不可用，所有字节标记为未缓存
-      log_printf("Cache not available, will load on-demand from source\n");
-    }
+    // // 尝试从cache文件加载已缓存的数据和valid标志
+    // bool loaded_from_cache = gba_load_rom_cache(scratch, scratch->rom_cache_data, rom_size);
+    // if (loaded_from_cache) {
+    //   // valid标志已经从cache文件加载，不需要额外设置
+    //   log_printf("Loaded ROM cache with validity flags\n");
+    // } else {
+    //   // cache不可用，所有字节标记为未缓存
+    //   log_printf("Cache not available, will load on-demand from source\n");
+    // }
     
     // 更新emu状态，使用cache数据
+    free(emu->rom_data); // 释放原有ROM数据
     emu->rom_data = scratch->rom_cache_data;
     emu->rom_size = rom_size;
 
