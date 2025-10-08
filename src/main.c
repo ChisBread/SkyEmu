@@ -2590,53 +2590,47 @@ static bool se_write_save_to_disk(const char* path){
       core.gb.cart.ram_is_dirty=false;
     }
   }else if(emu_state.system ==SYSTEM_GBA){
+    int size = 0; 
+    switch(core.gba.cart.backup_type){
+      case GBA_BACKUP_NONE       : size = 0;       break;
+      case GBA_BACKUP_EEPROM     : size = 8*1024;  break;
+      case GBA_BACKUP_EEPROM_512B: size = 512;     break;
+      case GBA_BACKUP_EEPROM_8KB : size = 8*1024;  break;
+      case GBA_BACKUP_SRAM       : size = 32*1024; break;
+      case GBA_BACKUP_FLASH_64K  : size = 64*1024; break;
+      case GBA_BACKUP_FLASH_128K : size = 128*1024;break;
+      case GBA_BACKUP_SRAM_128K  : size = 128*1024;break;
+    }
     if(core.gba.cart.backup_is_dirty){
-      int size = 0; 
-      switch(core.gba.cart.backup_type){
-        case GBA_BACKUP_NONE       : size = 0;       break;
-        case GBA_BACKUP_EEPROM     : size = 8*1024;  break;
-        case GBA_BACKUP_EEPROM_512B: size = 512;     break;
-        case GBA_BACKUP_EEPROM_8KB : size = 8*1024;  break;
-        case GBA_BACKUP_SRAM       : size = 32*1024; break;
-        case GBA_BACKUP_FLASH_64K  : size = 64*1024; break;
-        case GBA_BACKUP_FLASH_128K : size = 128*1024;break;
-        case GBA_BACKUP_SRAM_128K  : size = 128*1024;break;
-      }
       if(size){
-        saved =true;
-        if(sb_save_file_data(path,core.gba.mem.cart_backup,size)){
-        }else printf("Failed to write out save file: %s\n",path);
+        // 标记需要同步，但不立即执行
+        core.gba.scratch->save_sync_pending = true;
+        core.gba.scratch->save_sync_stable_frames = 0;
       }
-      
-      // 串口模式下，如果是Flash或SRAM_128K类型，标记需要同步，但不立即执行
-      if (core.gba.scratch && 
-          (core.gba.cart.backup_type == GBA_BACKUP_FLASH_64K || 
-           core.gba.cart.backup_type == GBA_BACKUP_FLASH_128K ||
-           core.gba.cart.backup_type == GBA_BACKUP_SRAM_128K)) {
-        core.gba.scratch->flash_sync_pending = true;
-        core.gba.scratch->flash_sync_stable_frames = 0;
-      }
-      
       core.gba.cart.backup_is_dirty=false;
     } else {
-      // 如果存档不是dirty状态，检查是否需要Flash同步
-      if (core.gba.scratch && core.gba.scratch->flash_sync_pending) {
+      // 如果存档不是dirty状态，检查是否需要save同步
+      if (core.gba.scratch->save_sync_pending) {
         if (!core.gba.cart.backup_is_dirty) {
-          core.gba.scratch->flash_sync_stable_frames++;
-          
+          core.gba.scratch->save_sync_stable_frames++;
           // 连续10帧未修改，执行同步
-          if (core.gba.scratch->flash_sync_stable_frames >= 10) {
-            if (core.gba.cart.backup_type == GBA_BACKUP_SRAM_128K) {
-              gba_serial_sync_sram_128k_backup(&core.gba);
-            } else {
-              gba_serial_sync_flash_backup(&core.gba);
+          if (core.gba.scratch->save_sync_stable_frames >= 10) {
+            if(sb_save_file_data(path,core.gba.mem.cart_backup,size)){
+            }else printf("Failed to write out save file: %s\n",path);
+            if (core.gba.scratch->rom_protocol == GBA_ROM_PROTOCOL_SERIAL) {
+              if (core.gba.cart.backup_type == GBA_BACKUP_SRAM_128K || core.gba.cart.backup_type == GBA_BACKUP_SRAM) {
+                gba_serial_sync_sram_backup(&core.gba, size);
+              } else if (core.gba.cart.backup_type == GBA_BACKUP_FLASH_64K || core.gba.cart.backup_type == GBA_BACKUP_FLASH_128K) {
+                gba_serial_sync_flash_backup(&core.gba, size);
+              }
             }
-            core.gba.scratch->flash_sync_pending = false;
-            core.gba.scratch->flash_sync_stable_frames = 0;
+            saved = true;
+            core.gba.scratch->save_sync_pending = false;
+            core.gba.scratch->save_sync_stable_frames = 0;
           }
         } else {
           // 如果又变dirty了，重置计数器
-          core.gba.scratch->flash_sync_stable_frames = 0;
+          core.gba.scratch->save_sync_stable_frames = 0;
         }
       }
     }
