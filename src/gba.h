@@ -890,7 +890,7 @@ typedef struct {
   bool is_rom;        // true=ROM区域(writeRom), false=RAM区域(writeRam)
 } gba_serial_write_entry_t;
 
-#define GBA_SERIAL_WRITE_BUFFER_SIZE 256  // 减小缓冲区，避免积累太多写入
+#define GBA_SERIAL_WRITE_BUFFER_SIZE 2048
 
 struct gba_scratch_t{
   uint8_t framebuffer[GBA_LCD_W*GBA_LCD_H*4];
@@ -2600,9 +2600,15 @@ static void gba_flush_serial_writes(gba_scratch_t *scratch) {
           data[j] = scratch->serial_write_buffer[i + j].data;
         }
         
-        if (batch_count < 10 || batch_count % 100 == 0) {
-          log_printf("[Serial] Batch #%d: %s addr=0x%08x, %d bytes (merged)\n", 
+        if (batch_count < 200 || batch_count % 400 == 0) {
+          log_printf("[Serial] Batch #%d: %s addr=0x%08x, %d bytes (merged) ", 
                  batch_count, start->is_rom ? "ROM" : "RAM", start->addr, count);
+          //print data (first 16byte)
+          for (int j = 0; j < (count < 16 ? count : 16); j++) {
+            log_printf("%02x ", data[j]);
+          }
+          if (count > 16) printf("...");
+          printf("\n");
         }
         batch_count++;
         
@@ -2618,7 +2624,7 @@ static void gba_flush_serial_writes(gba_scratch_t *scratch) {
       }
     } else {
       // 单个写入
-      if (batch_count < 10 || batch_count % 100 == 0) {
+      if (batch_count < 200 || batch_count % 400 == 0) {
         log_printf("[Serial] Batch #%d: %s addr=0x%08x, 1 byte\n", 
                batch_count, start->is_rom ? "ROM" : "RAM", start->addr);
       }
@@ -2650,7 +2656,14 @@ static void gba_buffer_serial_write(gba_scratch_t *scratch, uint32_t addr, uint8
       log_printf("[Serial] RAM prefetch cache invalidated due to %s write at 0x%08x\n",
             is_rom ? "ROM" : "RAM", addr);
   }
-  
+  // 疑似写命令,部分地址标记为不缓存
+  if (data == 0x30 || data == 0x20 || data == 0x60) {
+    for (int i = 0; i < 512; i++) {
+        scratch->rom_cache_valid[addr + i] = 0xFF;
+    }
+  }
+  scratch->rom_cache_valid[addr] = 0xFF;
+
   // 如果缓存满了，先刷新
   if (scratch->serial_write_count >= GBA_SERIAL_WRITE_BUFFER_SIZE) {
     gba_flush_serial_writes(scratch);
@@ -3010,10 +3023,13 @@ static uint8_t gba_read_rom_byte(gba_scratch_t *scratch, size_t offset) {
   }
   
   // 检查缓存是否已有这个字节
-  if (scratch->rom_cache_valid[offset]) {
+  if (scratch->rom_cache_valid[offset] == 1) {
     return scratch->rom_cache_data[offset];
   }
-  
+  if (scratch->rom_cache_valid[offset] == 0xAA) {
+    scratch->rom_cache_valid[offset] = 0xFF;
+    return scratch->rom_cache_data[offset];
+  }
   // 缓存未命中，读取一整块数据以优化后续访问
   // 计算块的起始地址(对齐到块大小)
   size_t chunk_start = (offset / GBA_ROM_CACHE_CHUNK_SIZE) * GBA_ROM_CACHE_CHUNK_SIZE;
@@ -3027,10 +3043,16 @@ static uint8_t gba_read_rom_byte(gba_scratch_t *scratch, size_t offset) {
   // 检查这个块是否已经部分或全部缓存
   bool need_read = false;
   for (size_t i = 0; i < chunk_size; i++) {
-    if (!scratch->rom_cache_valid[chunk_start + i]) {
+    if (scratch->rom_cache_valid[chunk_start + i] != 1) {
       need_read = true;
       break;
     }
+  }
+
+  if (scratch->rom_cache_valid[offset] == 0xFF) {
+    chunk_size = 2; // 如果这个字节标记为不缓存，缩小块大小以减少无用读取
+    chunk_start = offset - (offset % 2); // 对齐到2字节
+    need_read = true;
   }
   
   if (need_read) {
@@ -3071,13 +3093,19 @@ static uint8_t gba_read_rom_byte(gba_scratch_t *scratch, size_t offset) {
     if (success) {
       memcpy(scratch->rom_cache_data + chunk_start, temp_buffer, chunk_size);
       for (size_t i = 0; i < chunk_size; i++) {
-        scratch->rom_cache_valid[chunk_start + i] = 1;
+        if (scratch->rom_cache_valid[chunk_start + i] == 0) {
+          scratch->rom_cache_valid[chunk_start + i] = 1;
+        } else if (scratch->rom_cache_valid[chunk_start + i] == 0xFF) {
+          scratch->rom_cache_valid[chunk_start + i] = 0xAA;
+        }
       }
     }
     
     free(temp_buffer);
   }
-  
+  if (scratch->rom_cache_valid[offset] == 0xFF) {
+    printf("[Cache] non-cacheable byte read at 0x%zx value=0x%02x\n", offset, scratch->rom_cache_data[offset]);
+  }
   return scratch->rom_cache_data[offset];
 }
 
@@ -3730,6 +3758,9 @@ bool gba_load_rom(sb_emu_state_t*emu,gba_t* gba, gba_scratch_t *scratch){
     
     // 分配缓存有效位数组
     scratch->rom_cache_valid = (uint8_t*)calloc(rom_size, 1); // 初始化为0(未缓存)
+    for (int i = 0; i < 0xFF; i++) {
+      scratch->rom_cache_valid[i] = 0xFF;
+    }
     if (!scratch->rom_cache_valid) {
       log_printf("Failed to allocate memory for ROM cache valid bits (%zu bytes)\n", rom_size);
       free(scratch->rom_cache_data);
