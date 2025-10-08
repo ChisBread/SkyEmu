@@ -3006,7 +3006,7 @@ static void gba_write_backup_byte(gba_t* gba, uint32_t addr, uint8_t data) {
 
 // 字节级ROM读取 - 支持按需加载和缓存
 // 当缓存未命中时，会读取一整块数据以优化性能
-#define GBA_ROM_CACHE_CHUNK_SIZE 2048 // 2048字节块大小(串口传输更合理的大小)
+#define GBA_ROM_CACHE_CHUNK_SIZE 4096
 
 static uint8_t gba_read_rom_byte(gba_scratch_t *scratch, size_t offset) {
   if (!scratch->use_realtime_rom) {
@@ -3026,10 +3026,7 @@ static uint8_t gba_read_rom_byte(gba_scratch_t *scratch, size_t offset) {
   if (scratch->rom_cache_valid[offset] == 1) {
     return scratch->rom_cache_data[offset];
   }
-  if (scratch->rom_cache_valid[offset] == 0xAA) {
-    scratch->rom_cache_valid[offset] = 0xFF;
-    return scratch->rom_cache_data[offset];
-  }
+
   // 缓存未命中，读取一整块数据以优化后续访问
   // 计算块的起始地址(对齐到块大小)
   size_t chunk_start = (offset / GBA_ROM_CACHE_CHUNK_SIZE) * GBA_ROM_CACHE_CHUNK_SIZE;
@@ -3095,16 +3092,11 @@ static uint8_t gba_read_rom_byte(gba_scratch_t *scratch, size_t offset) {
       for (size_t i = 0; i < chunk_size; i++) {
         if (scratch->rom_cache_valid[chunk_start + i] == 0) {
           scratch->rom_cache_valid[chunk_start + i] = 1;
-        } else if (scratch->rom_cache_valid[chunk_start + i] == 0xFF) {
-          scratch->rom_cache_valid[chunk_start + i] = 0xAA;
         }
       }
     }
     
     free(temp_buffer);
-  }
-  if (scratch->rom_cache_valid[offset] == 0xFF) {
-    printf("[Cache] non-cacheable byte read at 0x%zx value=0x%02x\n", offset, scratch->rom_cache_data[offset]);
   }
   return scratch->rom_cache_data[offset];
 }
