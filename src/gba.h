@@ -1353,7 +1353,7 @@ static FORCE_INLINE void gba_store32(gba_t*gba, unsigned baddr, uint32_t data){
     }
     // ROM区域(0x08000000-0x0DFFFFFF)/ (0x0A000000-0x0BFFFFFF)/ (0x0C000000-0x0DFFFFFF)
     else if(((baddr > 0x08000000 && baddr < 0x0E000000) || (baddr >= 0x0A000000 && baddr < 0x0BFFFFFF) || (baddr >= 0x0C000000 && baddr < 0x0DFFFFFF)) 
-        && !(baddr>=0x080000C4 && baddr<=0x080000C8) && baddr!=0x09000000){
+        && !(baddr>=0x080000C4 && baddr<=0x080000C8) && baddr != 0x09000000){
       uint32_t rom_addr = baddr - 0x08000000;
       for(int i = 0; i < 4; i++){
         gba_buffer_serial_write(gba->scratch, rom_addr + i, (data >> (i*8)) & 0xFF, true);
@@ -1395,7 +1395,7 @@ static FORCE_INLINE void gba_store16(gba_t*gba, unsigned baddr, uint32_t data){
     }
     // ROM区域(0x08000000-0x0DFFFFFF)/ (0x0A000000-0x0BFFFFFF)/ (0x0C000000-0x0DFFFFFF)
     else if(((baddr > 0x08000000 && baddr < 0x0E000000) || (baddr >= 0x0A000000 && baddr < 0x0BFFFFFF) || (baddr >= 0x0C000000 && baddr < 0x0DFFFFFF)) 
-        && !(baddr>=0x080000C4&& baddr<=0x080000C8) && baddr!=0x09000000){
+        && !(baddr>=0x080000C4 && baddr<=0x080000C8) && baddr != 0x09000000){
       uint32_t rom_addr = baddr - 0x08000000;
       for(int i = 0; i < 2; i++){
         gba_buffer_serial_write(gba->scratch, rom_addr + i, (data >> (i*8)) & 0xFF, true);
@@ -1442,7 +1442,7 @@ static FORCE_INLINE void gba_store8(gba_t*gba, unsigned baddr, uint32_t data){
     }
     // ROM区域(0x08000000-0x0DFFFFFF)/ (0x0A000000-0x0BFFFFFF)/ (0x0C000000-0x0DFFFFFF)
     else if(((baddr > 0x08000000 && baddr < 0x0E000000) || (baddr >= 0x0A000000 && baddr < 0x0BFFFFFF) || (baddr >= 0x0C000000 && baddr < 0x0DFFFFFF)) 
-        && !(baddr>=0x080000C4&& baddr<=0x080000C8) && baddr!=0x09000000){
+        && !(baddr>=0x080000C4 && baddr<=0x080000C8) && baddr != 0x09000000){
       uint32_t rom_addr = baddr - 0x08000000;
       gba_buffer_serial_write(gba->scratch, rom_addr, data & 0xFF, true);
       return;
