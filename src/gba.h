@@ -1352,13 +1352,14 @@ static FORCE_INLINE void gba_store32(gba_t*gba, unsigned baddr, uint32_t data){
       return;
     }
     // ROM区域(0x08000000-0x0DFFFFFF)/ (0x0A000000-0x0BFFFFFF)/ (0x0C000000-0x0DFFFFFF)
-    else if(((baddr >= 0x08000000 && baddr < 0x0E000000) || (baddr >= 0x0A000000 && baddr < 0x0C000000) || (baddr >= 0x0C000000 && baddr < 0x0E000000)) 
-        && !(baddr >= 0x080000C4 && baddr <= 0x080000C8) && baddr != 0x09000000 && baddr != 0x080010c7 && baddr != 0x080010c9){
-      uint32_t rom_addr = baddr - 0x08000000;
-      for(int i = 0; i < 4; i++){
-        gba_buffer_serial_write(gba->scratch, rom_addr + i, (data >> (i*8)) & 0xFF, true);
+    else if(baddr >= 0x08000000 && baddr < 0x0E000000){
+      uint32_t rom_addr = baddr & 0x1FFFFFF;
+      if(!(baddr >= 0x000000C4 && baddr <= 0x000000C8) && baddr != 0x000010c7 && baddr != 0x000010c9) {
+        for(int i = 0; i < 4; i++){
+          gba_buffer_serial_write(gba->scratch, rom_addr + i, (data >> (i*8)) & 0xFF, true);
+        }
+        return;
       }
-      return;
     }
   }
   if(baddr==0x09000000) {
@@ -1394,13 +1395,14 @@ static FORCE_INLINE void gba_store16(gba_t*gba, unsigned baddr, uint32_t data){
       return;
     }
     // ROM区域(0x08000000-0x0DFFFFFF)/ (0x0A000000-0x0BFFFFFF)/ (0x0C000000-0x0DFFFFFF)
-    else if(((baddr >= 0x08000000 && baddr < 0x0E000000) || (baddr >= 0x0A000000 && baddr < 0x0C000000) || (baddr >= 0x0C000000 && baddr < 0x0E000000)) 
-        && !(baddr >= 0x080000C4 && baddr <= 0x080000C8) && baddr != 0x09000000 && baddr != 0x080010c7 && baddr != 0x080010c9){
-      uint32_t rom_addr = baddr - 0x08000000;
-      for(int i = 0; i < 2; i++){
-        gba_buffer_serial_write(gba->scratch, rom_addr + i, (data >> (i*8)) & 0xFF, true);
+    else if(baddr >= 0x08000000 && baddr < 0x0E000000){
+      uint32_t rom_addr = baddr & 0x1FFFFFF;
+      if(!(baddr >= 0x000000C4 && baddr <= 0x000000C8) && baddr != 0x000010c7 && baddr != 0x000010c9) {
+        for(int i = 0; i < 2; i++){
+          gba_buffer_serial_write(gba->scratch, rom_addr + i, (data >> (i*8)) & 0xFF, true);
+        }
+        return;
       }
-      return;
     }
   }
 
@@ -1441,11 +1443,12 @@ static FORCE_INLINE void gba_store8(gba_t*gba, unsigned baddr, uint32_t data){
       return;
     }
     // ROM区域(0x08000000-0x0DFFFFFF)/ (0x0A000000-0x0BFFFFFF)/ (0x0C000000-0x0DFFFFFF)
-    else if(((baddr >= 0x08000000 && baddr < 0x0E000000) || (baddr >= 0x0A000000 && baddr < 0x0C000000) || (baddr >= 0x0C000000 && baddr < 0x0E000000)) 
-        && !(baddr >= 0x080000C4 && baddr <= 0x080000C8) && baddr != 0x09000000 && baddr != 0x080010c7 && baddr != 0x080010c9){
-      uint32_t rom_addr = baddr - 0x08000000;
-      gba_buffer_serial_write(gba->scratch, rom_addr, data & 0xFF, true);
-      return;
+    else if(baddr >= 0x08000000 && baddr < 0x0E000000){
+      uint32_t rom_addr = baddr & 0x1FFFFFF;
+      if(!(baddr >= 0x000000C4 && baddr <= 0x000000C8) && baddr != 0x000010c7 && baddr != 0x000010c9) {
+        gba_buffer_serial_write(gba->scratch, rom_addr, data & 0xFF, true);
+        return;
+      }
     }
   }
   
@@ -3940,8 +3943,7 @@ bool gba_load_rom(sb_emu_state_t*emu,gba_t* gba, gba_scratch_t *scratch){
     gba->cart.backup_type = scratch->custom_backup_type;
     const char* backup_names[] = {"NONE", "EEPROM", "EEPROM_512B", "EEPROM_8KB", "SRAM", "FLASH_64K", "FLASH_128K", "SRAM_128K", "DIRECT"};
     log_printf("Using custom backup type: %s\n", backup_names[gba->cart.backup_type]);
-  } else if (scratch->use_realtime_rom && scratch->rom_protocol == GBA_ROM_PROTOCOL_SERIAL && scratch->custom_backup_type == -1) {
-    // 对于SERIAL类型但未指定backup类型，默认使用SRAM(通过串口访问RAM)
+  } else if (scratch->use_realtime_rom && scratch->rom_protocol == GBA_ROM_PROTOCOL_SERIAL && scratch->custom_backup_type == -2) {
     gba->cart.backup_type = GBA_BACKUP_DIRECT; // 先设为DIRECT，实际访问时通过gba_read_backup_byte/gba_write_backup_byte处理
     log_printf("Serial ROM: Backup type set to DIRECT (will use serial RAM access)\n");
   } else {
